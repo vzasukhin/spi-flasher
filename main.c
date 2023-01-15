@@ -25,6 +25,9 @@ struct arg {
 	char *fname;
 	uint32_t offset;
 	uint32_t size;
+	uint32_t flash_size;
+	uint32_t flash_eraseblock;
+	uint32_t flash_page;
 	enum command command;
 };
 
@@ -51,6 +54,9 @@ void show_help(void)
 	       " -h, --help           - show this message\n" \
 	       " -o, --offset OFFSET  - offset in bytes to read, flash or erase\n" \
 	       " -s, --size SIZE      - size of data to read, flash or erase\n" \
+	       " --flash-size         - override size of memory\n" \
+	       " --flash-eraseblock   - override size of erase block\n" \
+	       " --flash-page         - override size of page\n" \
 	       "\n" \
 	       "Example:\n" \
 	       " spi-flasher read -s 1024 file.dat\n" \
@@ -101,6 +107,9 @@ bool parse_size(char *s, uint32_t *value)
 int parse_arg(int argc, char *argv[], struct arg *arg)
 {
 	const struct option options[] = {
+		{ "flash-size", required_argument, NULL, 0 },
+		{ "flash-eraseblock", required_argument, NULL, 0 },
+		{ "flash-page", required_argument, NULL, 0 },
 		{ "help", no_argument, NULL, 'h' },
 		{ "offset", required_argument, NULL, 'o' },
 		{ "size", required_argument, NULL, 's' },
@@ -110,10 +119,28 @@ int parse_arg(int argc, char *argv[], struct arg *arg)
 	int c;
 	int pos = 0;
 
-	arg->offset = 0;
+	memset(arg, 0, sizeof(*arg));
 	arg->size = 0xffffffff;
 	while ((c = getopt_long(argc, argv, "ho:s:", options, &optidx)) != -1) {
 		switch (c) {
+		case 0:
+			switch (optidx) {
+			case 0:
+				if (!parse_size(optarg, &arg->flash_size))
+					return -1;
+				break;
+			case 1:
+				if (!parse_size(optarg, &arg->flash_eraseblock))
+					return -1;
+				break;
+			case 2:
+				if (!parse_size(optarg, &arg->flash_page))
+					return -1;
+				break;
+			default:
+				break;
+			}
+			break;
 		case 'h':
 			show_help();
 			return 0;
@@ -194,6 +221,15 @@ int main(int argc, char *argv[])
 		error(1, errno, "Can not set speed");
 
 	flash = spi_nor_init(&dev);
+	if (arg.flash_size)
+		flash->size = arg.flash_size;
+
+	if (arg.flash_eraseblock)
+		flash->erase_block = arg.flash_eraseblock;
+
+	if (arg.flash_page)
+		flash->page = arg.flash_page;
+
 	printf("Flash: %s\n", flash->name);
 	printf("Size: %u\n", flash->size);
 	printf("EraseBlock: %u\n", flash->erase_block);
@@ -204,6 +240,17 @@ int main(int argc, char *argv[])
 	}
 	printf("\n\n");
 
+	if (!flash->size) {
+		fprintf(stderr, "Unknown flash size\n");
+		usb_close(&dev);
+		return 1;
+	}
+	if ((!flash->erase_block || !flash->page) &&
+	    (arg.command == COMMAND_FLASH || arg.command == COMMAND_ERASE)) {
+		fprintf(stderr, "Unknown page size or erase block size\n");
+		usb_close(&dev);
+		return 1;
+	}
 	if (arg.offset + arg.size > flash->size) {
 		printf("WARNING: size is truncated to SPI memory size\n");
 		arg.size = flash->size - arg.offset;
