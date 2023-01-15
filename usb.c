@@ -83,10 +83,3 @@ bool usb_write(struct usb_device *device, void *buf, int len)
 
 	return ret >= 0;
 }
-
-void usb_handle_events(void)
-{
-	struct timeval tv = {0, 100};
-
-	libusb_handle_events_timeout(NULL, &tv);
-}

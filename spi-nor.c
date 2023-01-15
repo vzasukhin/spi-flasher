@@ -5,15 +5,11 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "common.h"
 #include "spi-nor.h"
 #include "spi.h"
 #include "usb.h"
 
-#define KiB 1024
-#define MiB (1024 * KiB)
-#define GiB (1024 * MiB)
-
-#define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
 
 #define CMD_READ_ID		0x9f
 #define CMD_READ_STATUS		0x5
