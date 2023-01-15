@@ -95,9 +95,9 @@ bool parse_size(char *s, uint32_t *value)
 int parse_arg(int argc, char *argv[], struct arg *arg)
 {
 	const struct option options[] = {
-		{ "--help", no_argument, NULL, 'h' },
-		{ "--offset", required_argument, NULL, 'o' },
-		{ "--size", required_argument, NULL, 's' },
+		{ "help", no_argument, NULL, 'h' },
+		{ "offset", required_argument, NULL, 'o' },
+		{ "size", required_argument, NULL, 's' },
 		{ NULL, 0, NULL, 0 },
 	};
 	int32_t optidx = 0;
