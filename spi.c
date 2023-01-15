@@ -156,10 +156,6 @@ bool spi_transfer_nocs(struct usb_device *device, uint8_t *data_out, uint8_t *da
 
 bool spi_transfer(struct usb_device *device, uint8_t *data_out, uint8_t *data_in, unsigned len)
 {
-	uint8_t buf_in[CH341_PACKET_LENGTH];
-	uint8_t buf_out[CH341_PACKET_LENGTH];
-	unsigned packet_len;
-
 	if (!spi_cs(device, true))
 		return false;
 

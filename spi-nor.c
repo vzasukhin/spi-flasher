@@ -95,7 +95,7 @@ static bool spi_nor_id_fill_w25q(struct spi_flash *flash, uint8_t *ids)
 
 	mark = get_size_by_id2(ids[2]) >> 17;
 
-	len = strlen(endian) + 9;
+	len = strlen(endian) + 10;
 	flash->name = (char *)realloc(flash->name, len);
 	snprintf(flash->name, len, "W25Q%u%s", mark, endian);
 
@@ -107,11 +107,14 @@ static bool spi_nor_id_fill_m25p(struct spi_flash *flash, uint8_t *ids)
 	uint32_t mark;
 
 	mark = get_size_by_id2(ids[2]) >> 17;
+	if (mark > 512)
+		return false;
+
 	if (mark <= 8)
 		mark *= 10;
 
-	flash->name = (char *)realloc(flash->name, 7);
-	snprintf(flash->name, 7, "M25P%u", mark);
+	flash->name = (char *)realloc(flash->name, 8);
+	snprintf(flash->name, 8, "M25P%u", mark);
 
 	return true;
 }
@@ -158,10 +161,10 @@ static bool spi_nor_id_fill_s25fl(struct spi_flash *flash, uint8_t *ids)
 	}
 
 	flash->name = (char *)realloc(flash->name, 10);
-	if (mark < 1024)
-		snprintf(flash->name, 7, "S%uF%c%u%c", family, medium, mark, endian);
+	if (mark <= 512)
+		snprintf(flash->name, 10, "S%02uF%c%u%c", family, medium, mark, endian);
 	else
-		snprintf(flash->name, 7, "S%02uGF%c%u%c", family, medium, mark / 1024, endian);
+		snprintf(flash->name, 10, "S%02uGF%c%u%c", family, medium, mark / 1024, endian);
 
 	return true;
 }
@@ -173,11 +176,13 @@ struct spi_flash spi_flashes[] = {
 		.page = 256,
 		.id_len = 1,
 		.ids = { 0x20 },
+		.fill_id_func = spi_nor_id_fill_m25p,
 	},
 	{
 		.name = "S25F",
 		.id_len = 1,
 		.ids = { 0x1 },
+		.fill_id_func = spi_nor_id_fill_s25fl,
 	},
 	{
 		.name = "W25Q",
@@ -276,8 +281,8 @@ static bool spi_nor_send_cmd_addr(struct usb_device *device, struct spi_flash *f
 	}
 
 	buf[0] = cmd;
-	for (int i = addr_count - 1; i >= 0; i--)
-		buf[i + 1] = (addr >> (i * 8)) & 0xff;
+	for (int i = 0; i < addr_count; i++)
+		buf[i + 1] = (addr >> ((addr_count - i - 1) * 8)) & 0xff;
 
 	memset(buf + 1 + addr_count, 0xff, dummy_count);
 
@@ -285,8 +290,7 @@ static bool spi_nor_send_cmd_addr(struct usb_device *device, struct spi_flash *f
 }
 
 bool spi_nor_read(struct usb_device *device, struct spi_flash *flash,
-		  uint32_t offset, uint32_t len, uint8_t *buf, unsigned buf_len,
-		  int fd, cb_progress progress)
+		  uint32_t offset, uint32_t len, uint8_t *buf, int fd, cb_progress progress)
 {
 	uint32_t pos = 0;
 
@@ -297,7 +301,7 @@ bool spi_nor_read(struct usb_device *device, struct spi_flash *flash,
 		return false;
 
 	if (buf) {
-		if (!spi_transfer_nocs(device, NULL, buf, buf_len))
+		if (!spi_transfer_nocs(device, NULL, buf, len))
 			return false;
 	} else {
 		uint8_t local_buf[16 * KiB];
@@ -364,6 +368,59 @@ bool spi_nor_erase(struct usb_device *device, struct spi_flash *flash, uint32_t 
 
 		pos += flash->erase_block;
 	}
+
+	return true;
+}
+
+bool spi_nor_erase_smart(struct usb_device *device, struct spi_flash *flash, uint32_t offset,
+			 uint32_t len, cb_progress progress)
+{
+	uint8_t *buf_pre = NULL, *buf_post = NULL;
+	uint32_t size_pre = offset % flash->erase_block;
+	uint32_t size_post = flash->erase_block - ((offset + len) % flash->erase_block);
+	bool res;
+
+	if (size_post == flash->erase_block)
+		size_post = 0;
+
+	if (size_pre) {
+		buf_pre = (uint8_t *)malloc(size_pre);
+		if (!spi_nor_read(device, flash, offset - size_pre, size_pre, buf_pre, 0, NULL))
+			return false;
+	}
+	if (size_post) {
+		buf_post = (uint8_t *)malloc(size_post);
+		if (!spi_nor_read(device, flash, offset + len, size_post, buf_post, 0, NULL)) {
+			free(buf_post);
+			if (size_pre)
+				free(buf_pre);
+
+			return false;
+		}
+	}
+	if (!spi_nor_erase(device, flash, offset - size_pre, len + size_pre + size_post, progress)) {
+		if (size_pre)
+			free(buf_pre);
+		if (size_post)
+			free(buf_post);
+
+		return false;
+	}
+
+	if (size_pre) {
+		res = spi_nor_program(device, flash, offset - size_pre, size_pre, buf_pre, 0, NULL);
+		free(buf_pre);
+		if (!res)
+			return false;
+	}
+
+	if (size_post) {
+		res = spi_nor_program_smart(device, flash, offset + len, size_post, buf_post, 0, NULL);
+		free(buf_post);
+		return res;
+	}
+
+	return true;
 }
 
 bool spi_nor_program_page_single(struct usb_device *device, struct spi_flash *flash,
@@ -424,4 +481,35 @@ bool spi_nor_program(struct usb_device *device, struct spi_flash *flash, uint32_
 		}
 		pos += block_len;
 	}
+
+	return true;
+}
+
+bool spi_nor_program_smart(struct usb_device *device, struct spi_flash *flash, uint32_t offset,
+			   uint32_t len, uint8_t *buf, int fd, cb_progress progress)
+{
+	uint32_t size_pre = offset % flash->page;
+
+	if (size_pre) {
+		uint8_t buf_pre[flash->page];
+		uint32_t len_in_first_page = min(len, flash->page - size_pre);
+
+		if (!spi_nor_read(device, flash, offset - size_pre, flash->page, buf_pre, 0, NULL))
+			return false;
+
+		if (buf)
+			memcpy(buf_pre + size_pre, buf, len_in_first_page);
+		else if (read(fd, buf_pre + size_pre, len_in_first_page) != len_in_first_page)
+			return false;
+
+		if (!spi_nor_program_page_single(device, flash, offset - size_pre, buf_pre, flash->page))
+			return false;
+
+		len -= len_in_first_page;
+		offset += len_in_first_page;
+		if (buf)
+			buf += len_in_first_page;
+	}
+
+	return spi_nor_program(device, flash, offset, len, buf, fd, progress);
 }

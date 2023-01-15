@@ -9,7 +9,6 @@
 bool usb_open(struct usb_device *device)
 {
 	struct libusb_device_handle *handle;
-	struct libusb_device *dev;
 
 	if (!device || libusb_init(NULL) < 0)
 		return false;

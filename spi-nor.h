@@ -17,14 +17,17 @@ typedef void (* cb_progress)(uint32_t);
 
 struct spi_flash *spi_nor_init(struct usb_device *device);
 bool spi_nor_read(struct usb_device *device, struct spi_flash *flash,
-		  uint32_t offset, uint32_t len, uint8_t *buf, unsigned buf_len,
-		  int fd, cb_progress progress);
+		  uint32_t offset, uint32_t len, uint8_t *buf, int fd, cb_progress progress);
 bool spi_nor_erase_block(struct usb_device *device, struct spi_flash *flash, uint32_t offset);
 bool spi_nor_erase(struct usb_device *device, struct spi_flash *flash, uint32_t offset,
 		   uint32_t len, cb_progress progress);
+bool spi_nor_erase_smart(struct usb_device *device, struct spi_flash *flash, uint32_t offset,
+			 uint32_t len, cb_progress progress);
 bool spi_nor_program_page_single(struct usb_device *device, struct spi_flash *flash,
 				 uint32_t offset, uint8_t *buf, uint32_t buf_len);
 bool spi_nor_program(struct usb_device *device, struct spi_flash *flash, uint32_t offset,
 		     uint32_t len, uint8_t *buf, int fd, cb_progress progress);
+bool spi_nor_program_smart(struct usb_device *device, struct spi_flash *flash, uint32_t offset,
+			   uint32_t len, uint8_t *buf, int fd, cb_progress progress);
 
 #endif

@@ -61,7 +61,7 @@ void show_help(void)
 bool parse_size(char *s, uint32_t *value)
 {
 	static const struct multiplier multipliers[] = {
-		{ "B", 1024 },
+		{ "B", 1 },
 		{ "K", 1024 },
 		{ "KiB", 1024 },
 		{ "M", 1024 * 1024 },
@@ -159,13 +159,13 @@ int parse_arg(int argc, char *argv[], struct arg *arg)
 			}
 			if (argc - optind != arguments_count) {
 				fprintf(stderr, "for %s command expected %d arguments\n",
-					arguments_count - 1);
+					argv[optind], arguments_count - 1);
 				return -1;
 			}
 		} else if (pos == 1) {
-			arg->fname = (char *)malloc(strlen(argv[optind]) + 1);
-			strcpy(arg->fname, argv[optind]);
+			arg->fname = strdup(argv[optind]);
 		}
+
 		optind++;
 		pos++;
 	}
@@ -219,7 +219,7 @@ int main(int argc, char *argv[])
 			return 1;
 		}
 		printf("Read %u bytes from offset %u\n", arg.size, arg.offset);
-		res = spi_nor_read(&dev, flash, arg.offset, arg.size, NULL, 0, fd, NULL);
+		res = spi_nor_read(&dev, flash, arg.offset, arg.size, NULL, fd, NULL);
 		if (close(fd) || !res) {
 			error(0, errno, "Can not read or save data");
 			usb_close(&dev);
@@ -228,11 +228,6 @@ int main(int argc, char *argv[])
 		printf("Read complete\n");
 		break;
 	case COMMAND_FLASH:
-		if (arg.offset % flash->page) {
-			fprintf(stderr, "Offset must be aligned to page size\n");
-			usb_close(&dev);
-			return 1;
-		}
 		fd = open(arg.fname, O_RDONLY);
 		if (fd == -1) {
 			error(0, errno, "Can not open file '%s'", arg.fname);
@@ -246,7 +241,7 @@ int main(int argc, char *argv[])
 		}
 		arg.size = min(arg.size, stat.st_size);
 		printf("Flash %u bytes from offset %u\n", arg.size, arg.offset);
-		res = spi_nor_program(&dev, flash, arg.offset, arg.size, NULL, fd, NULL);
+		res = spi_nor_program_smart(&dev, flash, arg.offset, arg.size, NULL, fd, NULL);
 		close(fd);
 		if (!res) {
 			error(0, errno, "Can not flash or read data from file");
@@ -256,13 +251,8 @@ int main(int argc, char *argv[])
 		printf("Flash complete\n");
 		break;
 	case COMMAND_ERASE:
-		if (arg.offset % flash->erase_block || arg.size % flash->erase_block) {
-			fprintf(stderr, "Offset and size must be aligned to erase block size\n");
-			usb_close(&dev);
-			return 1;
-		}
 		printf("Erase %u bytes from offset %u\n", arg.size, arg.offset);
-		if (!spi_nor_erase(&dev, flash, arg.offset, arg.size, NULL)) {
+		if (!spi_nor_erase_smart(&dev, flash, arg.offset, arg.size, NULL)) {
 			error(0, errno, "Can not erase");
 			usb_close(&dev);
 			return 1;
