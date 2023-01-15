@@ -7,9 +7,10 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "usb.h"
+#include "common.h"
 #include "spi.h"
 #include "spi-nor.h"
+#include "usb.h"
 
 
 enum command {
@@ -22,6 +23,11 @@ struct arg {
 	uint32_t offset;
 	uint32_t size;
 	enum command command;
+};
+
+struct multiplier {
+	char *name;
+	long mul;
 };
 
 void progress(uint32_t pos)
@@ -46,6 +52,46 @@ void show_help(void)
 	);
 }
 
+bool parse_size(char *s, uint32_t *value)
+{
+	static const struct multiplier multipliers[] = {
+		{ "B", 1024 },
+		{ "K", 1024 },
+		{ "KiB", 1024 },
+		{ "M", 1024 * 1024 },
+		{ "MiB", 1024 * 1024 },
+		{ "G", 1024 * 1024 * 1024 },
+		{ "GiB", 1024 * 1024 * 1024 },
+		{ "kB", 1000 },
+		{ "MB", 1000 * 1000 },
+		{ "GB", 1000 * 1000 * 1000 },
+	};
+	char *endptr;
+	long long val = strtoll(s, &endptr, 0);
+
+	if (*endptr) {
+		long mul = 0;
+		for (int i = 0; i < ARRAY_SIZE(multipliers); i++) {
+			if (!strcmp(multipliers[i].name, endptr)) {
+				mul = multipliers[i].mul;
+				break;
+			}
+		}
+		if (!mul) {
+			fprintf(stderr, "can not parse '%s'\n", s);
+			return false;
+		}
+		val *= mul;
+	}
+	if (val < 0 || val > 0xffffffff) {
+		fprintf(stderr, "out of range '%s' (%lld)\n", s, val);
+		return false;
+	}
+	*value = (uint32_t)val;
+
+	return true;
+}
+
 int parse_arg(int argc, char *argv[], struct arg *arg)
 {
 	const struct option options[] = {
@@ -67,10 +113,12 @@ int parse_arg(int argc, char *argv[], struct arg *arg)
 			return 0;
 			break;
 		case 'o':
-			arg->offset = strtoul(optarg, NULL, 0);
+			if (!parse_size(optarg, &arg->offset))
+				return -1;
 			break;
 		case 's':
-			arg->size = strtoul(optarg, NULL, 0);
+			if (!parse_size(optarg, &arg->size))
+				return -1;
 			break;
 		default:
 			printf("\n");
