@@ -331,34 +331,11 @@ bool spi_nor_erase_block(struct usb_device *device, struct spi_flash *flash, uin
 	if (!spi_nor_cmd_send(device, CMD_WRITE_ENABLE, NULL, 0))
 		return false;
 
-	if (!spi_nor_send_cmd_addr(device, flash, CMD_ERASE_SECTOR, CMD_ERASE_SECTOR_4BYTE,
-				   offset, 0))
-		return false;
-
-	do {
-		if (!spi_nor_cmd_recv(device, CMD_READ_STATUS, &status_reg, 1))
-			return false;
-	} while (status_reg & 0x1);
-
-	return spi_nor_cmd_send(device, CMD_WRITE_DISABLE, NULL, 0);
-}
-
-bool spi_nor_program_page_single(struct usb_device *device, struct spi_flash *flash,
-				 uint32_t offset, uint8_t *buf)
-{
-	uint8_t status_reg;
-
-	if (!spi_nor_cmd_send(device, CMD_WRITE_ENABLE, NULL, 0))
-		return false;
-
 	if (!spi_cs(device, true))
 		return false;
 
-	if (!spi_nor_send_cmd_addr(device, flash, CMD_PAGE_PROGRAM, CMD_PAGE_PROGRAM_4BYTE,
+	if (!spi_nor_send_cmd_addr(device, flash, CMD_ERASE_SECTOR, CMD_ERASE_SECTOR_4BYTE,
 				   offset, 0))
-		return false;
-
-	if (!spi_transfer_nocs(device, buf, NULL, flash->page))
 		return false;
 
 	if (!spi_cs(device, false))
@@ -370,4 +347,81 @@ bool spi_nor_program_page_single(struct usb_device *device, struct spi_flash *fl
 	} while (status_reg & 0x1);
 
 	return spi_nor_cmd_send(device, CMD_WRITE_DISABLE, NULL, 0);
+}
+
+bool spi_nor_erase(struct usb_device *device, struct spi_flash *flash, uint32_t offset,
+		   uint32_t len, cb_progress progress)
+{
+	uint32_t pos = 0;
+
+	while (pos < len) {
+		if (progress) {
+			progress(pos);
+		}
+
+		if (!spi_nor_erase_block(device, flash, offset + pos))
+			return false;
+
+		pos += flash->erase_block;
+	}
+}
+
+bool spi_nor_program_page_single(struct usb_device *device, struct spi_flash *flash,
+				 uint32_t offset, uint8_t *buf, uint32_t buf_len)
+{
+	uint8_t status_reg;
+
+	buf_len = min(buf_len, flash->page);
+	if (!spi_nor_cmd_send(device, CMD_WRITE_ENABLE, NULL, 0))
+		return false;
+
+	if (!spi_cs(device, true))
+		return false;
+
+	if (!spi_nor_send_cmd_addr(device, flash, CMD_PAGE_PROGRAM, CMD_PAGE_PROGRAM_4BYTE,
+				   offset, 0))
+		return false;
+
+	if (!spi_transfer_nocs(device, buf, NULL, buf_len))
+		return false;
+
+	if (!spi_cs(device, false))
+		return false;
+
+	do {
+		if (!spi_nor_cmd_recv(device, CMD_READ_STATUS, &status_reg, 1))
+			return false;
+	} while (status_reg & 0x1);
+
+	return spi_nor_cmd_send(device, CMD_WRITE_DISABLE, NULL, 0);
+}
+
+bool spi_nor_program(struct usb_device *device, struct spi_flash *flash, uint32_t offset,
+		     uint32_t len, uint8_t *buf, int fd, cb_progress progress)
+{
+	uint32_t block_len;
+	uint32_t pos = 0;
+
+	while (pos < len) {
+		if (progress) {
+			progress(pos);
+		}
+
+		block_len = min(len - pos, flash->page);
+		if (buf) {
+			if (!spi_nor_program_page_single(device, flash, offset + pos, buf + pos,
+							 block_len))
+				return false;
+		} else {
+			uint8_t local_buf[block_len];
+
+			if (read(fd, local_buf, block_len) == -1)
+				return false;
+
+			if (!spi_nor_program_page_single(device, flash, offset + pos, local_buf,
+							 block_len))
+				return false;
+		}
+		pos += block_len;
+	}
 }
