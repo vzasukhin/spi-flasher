@@ -200,25 +200,96 @@ int parse_arg(int argc, char *argv[], struct arg *arg)
 	return 1;
 }
 
+static bool do_read(struct usb_device *dev, struct spi_flash *flash, struct arg *arg)
+{
+	int fd = open(arg->fname, O_CREAT | O_WRONLY | O_TRUNC,
+		      S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
+	bool res;
+
+	if (fd == -1) {
+		error(0, errno, "ERROR: failed to open file '%s'", arg->fname);
+		return false;
+	}
+	printf("Reading %u bytes from offset %u...\n", arg->size, arg->offset);
+	res = spi_nor_read(dev, flash, arg->offset, arg->size, NULL, fd, NULL);
+	if (close(fd) || !res) {
+		error(0, errno, "ERROR: failed read or save data");
+		return false;
+	}
+	printf("Read completed\n");
+
+	return true;
+}
+
+static bool do_erase(struct usb_device *dev, struct spi_flash *flash, struct arg *arg)
+{
+	uint32_t erase_size;
+
+	printf("Erasing %u bytes", arg->size);
+	erase_size = spi_nor_calc_erase_size(flash, arg->offset, arg->size);
+	if (erase_size != arg->size)
+		printf(", rounded to %u bytes", erase_size);
+
+	printf(" (%u sectors, starting from %u)...\n",
+		erase_size / flash->erase_block, arg->offset & ~(flash->erase_block - 1));
+	if (!spi_nor_erase_smart(dev, flash, arg->offset, arg->size, NULL)) {
+		error(0, errno, "ERROR: failed to erase");
+		return false;
+	}
+
+	printf("Erase completed\n");
+
+	return true;
+}
+
+static bool do_flash(struct usb_device *dev, struct spi_flash *flash, struct arg *arg)
+{
+	struct stat stat;
+	int fd = open(arg->fname, O_RDONLY);
+	bool res;
+
+	if (fd == -1) {
+		error(0, errno, "ERROR: failed to open file '%s'", arg->fname);
+		return false;
+	}
+	if (fstat(fd, &stat)) {
+		error(0, errno, "ERROR: failed to get stat of file '%s'", arg->fname);
+		return false;
+	}
+	arg->size = min(arg->size, stat.st_size);
+
+	if (!do_erase(dev, flash, arg))
+		return false;
+
+	printf("Flashing %u bytes from offset %u...\n", arg->size, arg->offset);
+	res = spi_nor_program_smart(dev, flash, arg->offset, arg->size, NULL, fd, NULL);
+	close(fd);
+	if (!res) {
+		error(0, errno, "ERROR: failed flash or read data from file");
+		return false;
+	}
+	printf("Flash completed\n");
+
+	return true;
+}
+
 int main(int argc, char *argv[])
 {
 	struct usb_device dev;
 	struct spi_flash *flash;
-	struct stat stat;
 	struct arg arg;
 	int parse_res;
-	int fd;
-	bool res;
+	int retcode = 0;
 
 	parse_res = parse_arg(argc, argv, &arg);
 	if (parse_res <= 0)
 		return -parse_res;
 
 	if (!usb_open(&dev))
-		error(1, errno, "Can not open USB device");
+		error(1, errno, "ERROR: failed to open USB device");
 
 	if (!spi_set_speed(&dev, false))
-		error(1, errno, "Can not set speed");
+		error(1, errno, "ERROR: failed set speed");
 
 	flash = spi_nor_init(&dev);
 	if (arg.flash_size)
@@ -241,13 +312,13 @@ int main(int argc, char *argv[])
 	printf("\n\n");
 
 	if (!flash->size) {
-		fprintf(stderr, "Unknown flash size\n");
+		fprintf(stderr, "ERROR: Unknown flash size\n");
 		usb_close(&dev);
 		return 1;
 	}
 	if ((!flash->erase_block || !flash->page) &&
 	    (arg.command == COMMAND_FLASH || arg.command == COMMAND_ERASE)) {
-		fprintf(stderr, "Unknown page size or erase block size\n");
+		fprintf(stderr, "ERROR: Unknown page size or erase block size\n");
 		usb_close(&dev);
 		return 1;
 	}
@@ -258,53 +329,16 @@ int main(int argc, char *argv[])
 
 	switch (arg.command) {
 	case COMMAND_READ:
-		fd = open(arg.fname, O_CREAT | O_WRONLY,
-			  S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
-		if (fd == -1) {
-			error(0, errno, "Can not open file '%s'", arg.fname);
-			usb_close(&dev);
-			return 1;
-		}
-		printf("Read %u bytes from offset %u\n", arg.size, arg.offset);
-		res = spi_nor_read(&dev, flash, arg.offset, arg.size, NULL, fd, NULL);
-		if (close(fd) || !res) {
-			error(0, errno, "Can not read or save data");
-			usb_close(&dev);
-			return 1;
-		}
-		printf("Read complete\n");
+		if (!do_read(&dev, flash, &arg))
+			retcode = 1;
 		break;
 	case COMMAND_FLASH:
-		fd = open(arg.fname, O_RDONLY);
-		if (fd == -1) {
-			error(0, errno, "Can not open file '%s'", arg.fname);
-			usb_close(&dev);
-			return 1;
-		}
-		if (fstat(fd, &stat)) {
-			error(0, errno, "Can not get stat of file '%s'", arg.fname);
-			usb_close(&dev);
-			return 1;
-		}
-		arg.size = min(arg.size, stat.st_size);
-		printf("Flash %u bytes from offset %u\n", arg.size, arg.offset);
-		res = spi_nor_program_smart(&dev, flash, arg.offset, arg.size, NULL, fd, NULL);
-		close(fd);
-		if (!res) {
-			error(0, errno, "Can not flash or read data from file");
-			usb_close(&dev);
-			return 1;
-		}
-		printf("Flash complete\n");
+		if (!do_flash(&dev, flash, &arg))
+			retcode = 1;
 		break;
 	case COMMAND_ERASE:
-		printf("Erase %u bytes from offset %u\n", arg.size, arg.offset);
-		if (!spi_nor_erase_smart(&dev, flash, arg.offset, arg.size, NULL)) {
-			error(0, errno, "Can not erase");
-			usb_close(&dev);
-			return 1;
-		}
-		printf("Erase complete\n");
+		if (!do_erase(&dev, flash, &arg))
+			retcode = 1;
 		break;
 	default:
 		break;
@@ -312,5 +346,5 @@ int main(int argc, char *argv[])
 
 	usb_close(&dev);
 
-	return 0;
+	return retcode;
 }

@@ -513,3 +513,9 @@ bool spi_nor_program_smart(struct usb_device *device, struct spi_flash *flash, u
 
 	return spi_nor_program(device, flash, offset, len, buf, fd, progress);
 }
+
+uint32_t spi_nor_calc_erase_size(struct spi_flash *flash, uint32_t offset, uint32_t len)
+{
+	return ((offset + len - 1) | (flash->erase_block - 1)) -
+	       (offset & ~(flash->erase_block - 1)) + 1;
+}
