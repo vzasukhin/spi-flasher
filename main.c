@@ -353,7 +353,11 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 	if (arg.offset + arg.size > flash->size) {
-		printf("WARNING: size is truncated to SPI memory size\n");
+		// For COMMAND_FLASH size will be ajusted in do_flash().
+		// Now arg.size is maximal and this is normal.
+		if (arg.command != COMMAND_FLASH)
+			printf("WARNING: size is truncated to SPI memory size\n");
+
 		arg.size = flash->size - arg.offset;
 	}
 
