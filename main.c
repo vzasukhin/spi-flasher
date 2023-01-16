@@ -43,25 +43,44 @@ void progress(uint32_t pos)
 
 void show_help(void)
 {
-	printf("SPI Flasher can work with CH341 based modules\n" \
-	       "Usage: spi-flasher [-o] [-s] COMMAND [FILE]\n" \
+	printf("SPI Flasher can work with CH341 converter\n" \
+	       "Usage: spi-flasher [options] COMMAND [FILE]\n" \
 	       " COMMAND can be one of\n" \
-	       "   read  - read data from memory\n" \
-	       "   flash - write data to memory\n" \
-	       "   erase - write data to memory\n" \
+	       "   read  - read data from memory. Must be specified file to save data\n" \
+	       "   flash - write data to memory. Must be specified file to get data\n" \
+	       "   erase - erase data on memory\n" \
 	       " FILE is file name to save read from flash data or to get data for writing to flash\n" \
 	       "\n" \
 	       " -h, --help           - show this message\n" \
-	       " -o, --offset OFFSET  - offset in bytes to read, flash or erase\n" \
-	       " -s, --size SIZE      - size of data to read, flash or erase\n" \
-	       " --flash-size         - override size of memory\n" \
-	       " --flash-eraseblock   - override size of erase block\n" \
-	       " --flash-page         - override size of page\n" \
+	       " -o, --offset OFFSET  - offset of SPI memory to read, flash or erase (default: 0)\n" \
+	       " -s, --size SIZE      - maximum size of data to read, flash or erase. If not specified,\n" \
+	       "                        then will try to read/erase all contains of memory.\n" \
+	       "                        For flash command will write not more than source file size\n" \
+	       " --flash-size SIZE    - override size of memory\n" \
+	       " --flash-eraseblock SIZE - override size of erase block\n" \
+	       " --flash-page SIZE    - override size of page\n" \
 	       "\n" \
 	       "Example:\n" \
 	       " spi-flasher read -s 1024 file.dat\n" \
 	       " spi-flasher flash file.dat\n" \
 	);
+}
+
+void print_size(uint32_t value, bool eol)
+{
+	static const char *suffixes[] = {"", "KiB", "MiB", "GiB"};
+	int idx = 0;
+
+	if (value) {
+		for (int i = 1; i < ARRAY_SIZE(suffixes); i++) {
+			if (!(value % 1024)) {
+				value /= 1024;
+				idx = i;
+			} else
+				break;
+		}
+	}
+	printf("%u%s%s", value, suffixes[idx], eol ? "\n" : "");
 }
 
 bool parse_size(char *s, uint32_t *value)
@@ -301,15 +320,26 @@ int main(int argc, char *argv[])
 	if (arg.flash_page)
 		flash->page = arg.flash_page;
 
-	printf("Flash: %s\n", flash->name);
-	printf("Size: %u\n", flash->size);
-	printf("EraseBlock: %u\n", flash->erase_block);
-	printf("Page: %u\n", flash->page);
-	printf("ID: ");
-	for (int i = 0; i < flash->id_len; i++) {
+	printf("Flash:      %s\n", flash->name);
+	printf("Size:       ");
+	print_size(flash->size, true);
+	printf("EraseBlock: ");
+	print_size(flash->erase_block, true);
+	printf("Page:       ");
+	print_size(flash->page, true);
+	printf("ID:        ");
+	for (int i = 0; i < flash->id_len; i++)
 		printf(" %02x", flash->ids[i]);
-	}
+
 	printf("\n\n");
+	printf("arg.offset: ");
+	print_size(arg.offset, true);
+	printf("arg.size:   ");
+	if (arg.size == 0xffffffff)
+		printf("maximum");
+	else
+		print_size(arg.size, true);
+	printf("\n");
 
 	if (!flash->size) {
 		fprintf(stderr, "ERROR: Unknown flash size\n");
