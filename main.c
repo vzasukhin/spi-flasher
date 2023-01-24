@@ -2,6 +2,7 @@
 #include <error.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,6 +13,8 @@
 #include "spi.h"
 #include "spi-nor.h"
 #include "usb.h"
+
+#define PROGRESS_WIDTH 16
 
 
 enum command {
@@ -29,6 +32,7 @@ struct arg {
 	uint32_t flash_eraseblock;
 	uint32_t flash_page;
 	enum command command;
+	bool hide_progress;
 };
 
 struct multiplier {
@@ -36,9 +40,80 @@ struct multiplier {
 	long mul;
 };
 
-void progress(uint32_t pos)
+cb_progress progress;
+uint32_t progress_last_points = (uint32_t)-1;
+
+static void print_utf8(uint32_t c)
 {
-	printf("pos: %u\n", pos);
+	uint8_t buf[4];
+	int pos = sizeof(buf) - 1;
+
+	if (c < 0x80) {
+		printf("%c", c);
+		return;
+	}
+	for (int i = 0; i < sizeof(buf); i++) {
+		int mask = GENMASK(pos + 7 - sizeof(buf), 0);
+		if (!(c & ~mask)) {
+			buf[pos] = c | GENMASK(7, pos + sizeof(buf));
+			break;
+		} else {
+			buf[pos] = (c & 0x3f) | 0x80;
+			c >>= 6;
+		}
+		if (--pos < 0)
+			return;
+	}
+	while (pos < sizeof(buf)) {
+		putchar(buf[pos++]);
+	}
+}
+
+static void _progress(uint32_t pos, uint32_t size, const uint32_t *symbols, int symbols_count)
+{
+	uint32_t points = (uint64_t)pos * PROGRESS_WIDTH * symbols_count / size;
+	uint32_t intpoints = points / symbols_count;
+	uint32_t frac = points & (symbols_count - 1);
+
+	// visible progress is not changed
+	if (points == progress_last_points)
+		return;
+
+	printf("\r[");
+	for (int i = 0; i < intpoints; i++)
+		print_utf8(symbols[symbols_count - 1]);
+	if (!frac)
+		putchar(' ');
+	else
+		print_utf8(symbols[frac]);
+
+	for (int i = intpoints; i < PROGRESS_WIDTH - 1; i++)
+		putchar(' ');
+	putchar(']');
+	fflush(stdout);
+	progress_last_points = points;
+}
+
+void progress_utf8(uint32_t pos, uint32_t size)
+{
+	static const uint32_t progress_symbols[] = { 0x258f, 0x258e, 0x258d, 0x258c,
+						     0x258b, 0x258a, 0x2589, 0x2588 };
+
+	_progress(pos, size, progress_symbols, 8);
+}
+
+void progress_ascii(uint32_t pos, uint32_t size)
+{
+	uint32_t progress_symbol = '#';
+
+	_progress(pos, size, &progress_symbol, 1);
+}
+
+void progress_close(void)
+{
+	printf("\r%18s\r", "");
+	fflush(stdout);
+	progress_last_points = (uint32_t)-1;
 }
 
 void show_help(void)
@@ -56,6 +131,7 @@ void show_help(void)
 	       " -s, --size SIZE      - maximum size of data to read, flash or erase. If not specified,\n" \
 	       "                        then will try to read/erase all contains of memory.\n" \
 	       "                        For flash command will write not more than source file size\n" \
+	       " --hide-progress      - do not show progress bar\n" \
 	       " --flash-size SIZE    - override size of memory\n" \
 	       " --flash-eraseblock SIZE - override size of erase block\n" \
 	       " --flash-page SIZE    - override size of page\n" \
@@ -129,6 +205,7 @@ int parse_arg(int argc, char *argv[], struct arg *arg)
 		{ "flash-size", required_argument, NULL, 0 },
 		{ "flash-eraseblock", required_argument, NULL, 0 },
 		{ "flash-page", required_argument, NULL, 0 },
+		{ "hide-progress", no_argument, NULL, 0 },
 		{ "help", no_argument, NULL, 'h' },
 		{ "offset", required_argument, NULL, 'o' },
 		{ "size", required_argument, NULL, 's' },
@@ -155,6 +232,9 @@ int parse_arg(int argc, char *argv[], struct arg *arg)
 			case 2:
 				if (!parse_size(optarg, &arg->flash_page))
 					return -1;
+				break;
+			case 3:
+				arg->hide_progress = true;
 				break;
 			default:
 				break;
@@ -230,7 +310,8 @@ static bool do_read(struct usb_device *dev, struct spi_flash *flash, struct arg 
 		return false;
 	}
 	printf("Reading %u bytes from offset %u...\n", arg->size, arg->offset);
-	res = spi_nor_read(dev, flash, arg->offset, arg->size, NULL, fd, NULL);
+	res = spi_nor_read(dev, flash, arg->offset, arg->size, NULL, fd, progress);
+	progress_close();
 	if (close(fd) || !res) {
 		error(0, errno, "ERROR: failed read or save data");
 		return false;
@@ -243,6 +324,7 @@ static bool do_read(struct usb_device *dev, struct spi_flash *flash, struct arg 
 static bool do_erase(struct usb_device *dev, struct spi_flash *flash, struct arg *arg)
 {
 	uint32_t erase_size;
+	bool res;
 
 	printf("Erasing %u bytes", arg->size);
 	erase_size = spi_nor_calc_erase_size(flash, arg->offset, arg->size);
@@ -251,7 +333,10 @@ static bool do_erase(struct usb_device *dev, struct spi_flash *flash, struct arg
 
 	printf(" (%u sectors, starting from %u)...\n",
 		erase_size / flash->erase_block, arg->offset & ~(flash->erase_block - 1));
-	if (!spi_nor_erase_smart(dev, flash, arg->offset, arg->size, NULL)) {
+
+	res = spi_nor_erase_smart(dev, flash, arg->offset, arg->size, progress);
+	progress_close();
+	if (!res) {
 		error(0, errno, "ERROR: failed to erase");
 		return false;
 	}
@@ -281,7 +366,8 @@ static bool do_flash(struct usb_device *dev, struct spi_flash *flash, struct arg
 		return false;
 
 	printf("Flashing %u bytes from offset %u...\n", arg->size, arg->offset);
-	res = spi_nor_program_smart(dev, flash, arg->offset, arg->size, NULL, fd, NULL);
+	res = spi_nor_program_smart(dev, flash, arg->offset, arg->size, NULL, fd, progress);
+	progress_close();
 	close(fd);
 	if (!res) {
 		error(0, errno, "ERROR: failed flash or read data from file");
@@ -299,10 +385,18 @@ int main(int argc, char *argv[])
 	struct arg arg;
 	int parse_res;
 	int retcode = 0;
+	char *locale = setlocale(LC_ALL, "");
 
 	parse_res = parse_arg(argc, argv, &arg);
 	if (parse_res <= 0)
 		return -parse_res;
+
+	if (!arg.hide_progress) {
+		if (strstr(locale, ".UTF-8") || strstr(locale, ".utf-8"))
+			progress = progress_utf8;
+		else
+			progress = progress_ascii;
+	}
 
 	if (!usb_open(&dev))
 		error(1, errno, "ERROR: failed to open USB device");

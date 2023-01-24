@@ -293,6 +293,7 @@ bool spi_nor_read(struct usb_device *device, struct spi_flash *flash,
 		  uint32_t offset, uint32_t len, uint8_t *buf, int fd, cb_progress progress)
 {
 	uint32_t pos = 0;
+	uint32_t remain = len;
 
 	if (!spi_cs(device, true))
 		return false;
@@ -306,15 +307,15 @@ bool spi_nor_read(struct usb_device *device, struct spi_flash *flash,
 	} else {
 		uint8_t local_buf[16 * KiB];
 
-		while (len) {
-			uint32_t block_len = min(len, 16 * KiB);
+		while (remain) {
+			uint32_t block_len = min(remain, 16 * KiB);
 
 			if (progress) {
-				progress(pos);
+				progress(pos, len);
 				pos += block_len;
 			}
 
-			len -= block_len;
+			remain -= block_len;
 			if (!spi_transfer_nocs(device, NULL, local_buf, block_len))
 				return false;
 
@@ -360,7 +361,7 @@ bool spi_nor_erase(struct usb_device *device, struct spi_flash *flash, uint32_t 
 
 	while (pos < len) {
 		if (progress) {
-			progress(pos);
+			progress(pos, len);
 		}
 
 		if (!spi_nor_erase_block(device, flash, offset + pos))
@@ -461,7 +462,7 @@ bool spi_nor_program(struct usb_device *device, struct spi_flash *flash, uint32_
 
 	while (pos < len) {
 		if (progress) {
-			progress(pos);
+			progress(pos, len);
 		}
 
 		block_len = min(len - pos, flash->page);
