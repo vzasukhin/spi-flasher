@@ -1,5 +1,5 @@
 /*
- * Protocol and defines from https://github.com/setarcos/ch341prog.git
+ * Protocol and defines from https://github.com/setarcos/ch341prog
  */
 
 #include "spi.h"
