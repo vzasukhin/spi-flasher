@@ -9,6 +9,7 @@
 
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
 #define GENMASK(h, l) (((~0U) << (l)) & (~0U >> (31 - (h))))
+#define BIT(x) (1UL << (x))
 
 #define min(a, b) (((a) < (b)) ? (a) : (b))
 #define max(a, b) (((a) > (b)) ? (a) : (b))
