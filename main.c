@@ -32,6 +32,9 @@ enum command {
 struct arg;
 struct command_op {
 	const char *command_name;
+	const char *help;
+	const char *usage;
+	const char *example;
 	bool (* func)(struct usb_device *, struct spi_flash *, struct arg *);
 	uint32_t flags;
 	enum command command;
@@ -132,33 +135,6 @@ void progress_close(void)
 	printf("\r%18s\r", "");
 	fflush(stdout);
 	progress_last_points = (uint32_t)-1;
-}
-
-void show_help(void)
-{
-	printf("SPI Flasher can work with CH341 converter\n" \
-	       "Usage: spi-flasher [options] COMMAND [FILE]\n" \
-	       " COMMAND can be one of\n" \
-	       "   read  - read data from memory. Must be specified file to save data\n" \
-	       "   flash - write data to memory. Must be specified file to get data\n" \
-	       "   erase - erase data on memory\n" \
-	       " FILE is file name to save read from flash data or to get data for writing to flash\n" \
-	       "\n" \
-	       " -h, --help           - show this message\n" \
-	       " -o, --offset OFFSET  - offset of SPI memory to read, flash or erase (default: 0)\n" \
-	       " -s, --size SIZE      - maximum size of data to read, flash or erase. If not specified,\n" \
-	       "                        then will try to read/erase all contains of memory.\n" \
-	       "                        For flash command will write not more than source file size\n" \
-	       " --hide-progress      - do not show progress bar\n" \
-	       " --custom-duplex      - start receive data from first sended byte (only for custom command)\n" \
-	       " --flash-size SIZE    - override size of memory\n" \
-	       " --flash-eraseblock SIZE - override size of erase block\n" \
-	       " --flash-page SIZE    - override size of page\n" \
-	       "\n" \
-	       "Example:\n" \
-	       " spi-flasher read -s 1024 file.dat\n" \
-	       " spi-flasher flash file.dat\n" \
-	);
 }
 
 void print_size(uint32_t value, bool eol)
@@ -327,6 +303,9 @@ static bool do_custom(struct usb_device *dev, struct spi_flash *flash, struct ar
 struct command_op command_ops[] = {
 	{
 		.command_name = "read",
+		.help = "read data from SPI memory. Must be specified file to save data",
+		.usage = "FILE [-s] [-o] [--flash-size]",
+		.example = "a.dat -s 1K",
 		.command = COMMAND_READ,
 		.flags = FLAG_REQUIRE_SIZE,
 		.func = do_read,
@@ -334,6 +313,9 @@ struct command_op command_ops[] = {
 	},
 	{
 		.command_name = "flash",
+		.help = "write data to SPI memory. Must be specified file to get data",
+		.usage = "FILE [-s] [-o] [--flash-size] [--flash-eraseblock] [--flash-page]",
+		.example = "a.dat",
 		.command = COMMAND_FLASH,
 		.flags = FLAG_REQUIRE_SIZE | FLAG_REQUIRE_ERASE_BLOCK | FLAG_REQUIRE_PAGE,
 		.func = do_flash,
@@ -341,6 +323,9 @@ struct command_op command_ops[] = {
 	},
 	{
 		.command_name = "erase",
+		.help = "erase data on memory",
+		.usage = "[-s] [-o] [--flash-size] [--flash-eraseblock]",
+		.example = "-o 64K -s 128K",
 		.command = COMMAND_ERASE,
 		.flags = FLAG_REQUIRE_SIZE | FLAG_REQUIRE_ERASE_BLOCK,
 		.func = do_erase,
@@ -348,12 +333,37 @@ struct command_op command_ops[] = {
 	},
 	{
 		.command_name = "custom",
+		.help = "send custom command and receive response",
+		.usage = "BYTES_TO_SEND RECEIVE_LENGTH [--custom-duplex]",
+		.example = "'0x3 0 0 0' 20",
 		.command = COMMAND_CUSTOM,
 		.flags = 0,
 		.func = do_custom,
 		.arguments_count = 3,
 	},
 };
+
+void show_help(void)
+{
+	printf("SPI Flasher can work with CH341 converter\n" \
+	       "Usage: spi-flasher [options] COMMAND ...\n" \
+	       " COMMAND can be one of\n\n");
+	for (int i = 0; i < ARRAY_SIZE(command_ops); i++) {
+		printf("  %s - %s\n", command_ops[i].command_name, command_ops[i].help);
+		printf("   Usage: spi-flasher %s %s\n", command_ops[i].command_name, command_ops[i].usage);
+		printf("   Example: spi-flasher %s %s\n\n", command_ops[i].command_name, command_ops[i].example);
+	}
+	printf(" -h, --help           - show this message\n" \
+	       " -o, --offset OFFSET  - offset of SPI memory to read, flash or erase (default: 0)\n" \
+	       " -s, --size SIZE      - maximum size of data to read, flash or erase. If not specified,\n" \
+	       "                        then will try to read/erase all contains of memory.\n" \
+	       "                        For flash command will write not more than source file size\n" \
+	       " --hide-progress      - do not show progress bar\n" \
+	       " --custom-duplex      - start receive data from first sended byte (only for custom command)\n" \
+	       " --flash-size SIZE    - override size of memory\n" \
+	       " --flash-eraseblock SIZE - override size of erase block\n" \
+	       " --flash-page SIZE    - override size of page\n");
+}
 
 /*
  * s - pointer to string where numbers separated by space, tabulation or newline characters.

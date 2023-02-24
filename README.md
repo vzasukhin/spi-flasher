@@ -1,6 +1,6 @@
 # SPI Flasher
 
-[На русском языке](README-ru.md)
+**[English]** [Русский](README-ru.md)
 
 Command line tool to program/erase/read SPI NOR memories.
 Suported CH341A USB->SPI converter. CH341A protocol used
@@ -23,7 +23,8 @@ Commands list:
 
 - `read` - read data from SPI;
 - `flash` - write data to SPI;
-- `erase` - erase data.
+- `erase` - erase data;
+- `custom` - send custom data and receive response.
 
 Arguments list:
 
@@ -31,6 +32,8 @@ Arguments list:
 - `-s`, `--size` - specify data size for read/flash/erase;
 - `--hide-progress` - don't show progress bar (can be helpfull for automatic run to reduce
   logs size);
+- `--custom-duplex` - for `custom` command will output response starting from first byte.
+  Otherwise will starting response after sending data;
 - `--flash-size` - override SPI Flash size;
 - `--flash-eraseblock` - override erase block (sector) size;
 - `--flash-page` - override page size.
@@ -63,7 +66,7 @@ spi-flasher -o 3MiB -s 1MiB read file.dat
 spi-flasher --flash-size 2M -s 1MB read file.dat
 
 # flash file to SPI Flash (erase is not required)
-spi-flasher write file.dat
+spi-flasher flash file.dat
 ```
 
 ## read command
@@ -107,3 +110,48 @@ Erase SPI Flash. If `--size` is not specified then will erased data to end of SP
 
 For flash command SPI Flash size and erase block must be known. If SPI Flash autodetect
 failed then `--flash-size` and `--flash-eraseblock` should be specified.
+
+## custom command
+
+Usage:
+
+```
+spi-flasher [options] custom <bytes_to_send> <response_length>
+```
+
+Send custom data to device and receive `<response_length>` bytes of response.
+Without `--custom-duplex` will receive data after send:
+
+```
+MOSI  <send_byte1> <send_byte2> ... <send_byteN>
+MISO                                             <recv_byte1> <recv_byte2> ...
+```
+
+If `--custom-duplex` is specified then will start receiving data simultaneously with sending data.
+This mode useless for flashes but can be helpfull for another type of devices:
+
+```
+MOSI  <send_byte1> <send_byte2> ... <send_byteN>
+MISO  <recv_byte1> <recv_byte2> ... <recv_byteN>
+```
+
+Examples:
+
+`spi-flasher custom '0x3 0 0 0' 10` - send command 3 (read from SPI Flash) beginning from
+address 0 and receive 10 bytes.
+
+`spi-flasher custom '0x9f' 4` for W25Q64FV will output:
+```
+Data to send:
+9f
+Received data:
+ef 40 17 00
+```
+
+`spi-flasher custom '0x9f' 4 --custom-duplex` for W25Q64FV will output:
+```
+Data to send:
+9f
+Received data:
+ff ef 40 17
+```
