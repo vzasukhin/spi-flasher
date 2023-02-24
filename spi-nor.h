@@ -27,6 +27,8 @@ bool spi_nor_program(struct usb_device *device, struct spi_flash *flash, uint32_
 		     uint32_t len, uint8_t *buf, int fd, cb_progress progress);
 bool spi_nor_program_smart(struct usb_device *device, struct spi_flash *flash, uint32_t offset,
 			   uint32_t len, uint8_t *buf, int fd, cb_progress progress);
+bool spi_nor_custom(struct usb_device *device, uint8_t *tx, uint32_t tx_len,
+		    uint8_t *rx, uint32_t rx_len, bool duplex);
 uint32_t spi_nor_calc_erase_size(struct spi_flash *flash, uint32_t offset, uint32_t len);
 
 #endif

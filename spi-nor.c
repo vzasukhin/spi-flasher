@@ -265,6 +265,44 @@ static bool spi_nor_cmd_recv(struct usb_device *device, uint8_t cmd, uint8_t *da
 	return ret;
 }
 
+bool spi_nor_custom(struct usb_device *device, uint8_t *tx, uint32_t tx_len,
+		    uint8_t *rx, uint32_t rx_len, bool duplex)
+{
+	uint32_t len;
+	bool ret = true;
+
+	if (!spi_cs(device, true))
+		return false;
+
+	if (duplex && tx_len && rx_len) {
+		// If rx_len < tx_len in duplex mode then we need fill rx in first transaction
+		len = min(tx_len, rx_len);
+		ret = spi_transfer_nocs(device, tx, rx, len);
+		if (!ret) {
+			spi_cs(device, false);
+			return false;
+		}
+		tx_len -= len;
+		rx_len -= len;
+		tx += len;
+		rx += len;
+	}
+	if (tx_len) {
+		ret = spi_transfer_nocs(device, tx, NULL, tx_len);
+		if (!ret) {
+			spi_cs(device, false);
+			return false;
+		}
+	}
+	if (rx_len) {
+		ret = spi_transfer_nocs(device, NULL, rx, rx_len);
+	}
+
+	ret = ret && spi_cs(device, false);
+
+	return ret;
+}
+
 static bool spi_nor_send_cmd_addr(struct usb_device *device, struct spi_flash *flash,
 				  uint8_t cmd3, uint8_t cmd4, uint32_t addr, unsigned dummy_count)
 {

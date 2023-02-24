@@ -25,6 +25,7 @@ enum command {
 	COMMAND_READ,
 	COMMAND_FLASH,
 	COMMAND_ERASE,
+	COMMAND_CUSTOM,
 	COMMAND_UNKNOWN  // must be last
 };
 
@@ -38,13 +39,17 @@ struct command_op {
 };
 
 struct arg {
-	char *fname;
+	char *args[2];
+	uint8_t *data;
+	uint32_t data_len;
+	uint32_t data_rx_len;
 	uint32_t offset;
 	uint32_t size;
 	uint32_t flash_size;
 	uint32_t flash_eraseblock;
 	uint32_t flash_page;
 	struct command_op *command_op;
+	bool custom_duplex;
 	bool hide_progress;
 };
 
@@ -145,6 +150,7 @@ void show_help(void)
 	       "                        then will try to read/erase all contains of memory.\n" \
 	       "                        For flash command will write not more than source file size\n" \
 	       " --hide-progress      - do not show progress bar\n" \
+	       " --custom-duplex      - start receive data from first sended byte (only for custom command)\n" \
 	       " --flash-size SIZE    - override size of memory\n" \
 	       " --flash-eraseblock SIZE - override size of erase block\n" \
 	       " --flash-page SIZE    - override size of page\n" \
@@ -214,12 +220,12 @@ bool parse_size(char *s, uint32_t *value)
 
 static bool do_read(struct usb_device *dev, struct spi_flash *flash, struct arg *arg)
 {
-	int fd = open(arg->fname, O_CREAT | O_WRONLY | O_TRUNC,
+	int fd = open(arg->args[0], O_CREAT | O_WRONLY | O_TRUNC,
 		      S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
 	bool res;
 
 	if (fd == -1) {
-		error(0, errno, "ERROR: failed to open file '%s'", arg->fname);
+		error(0, errno, "ERROR: failed to open file '%s'", arg->args[0]);
 		return false;
 	}
 	printf("Reading %u bytes from offset %u...\n", arg->size, arg->offset);
@@ -262,15 +268,15 @@ static bool do_erase(struct usb_device *dev, struct spi_flash *flash, struct arg
 static bool do_flash(struct usb_device *dev, struct spi_flash *flash, struct arg *arg)
 {
 	struct stat stat;
-	int fd = open(arg->fname, O_RDONLY);
+	int fd = open(arg->args[0], O_RDONLY);
 	bool res;
 
 	if (fd == -1) {
-		error(0, errno, "ERROR: failed to open file '%s'", arg->fname);
+		error(0, errno, "ERROR: failed to open file '%s'", arg->args[0]);
 		return false;
 	}
 	if (fstat(fd, &stat)) {
-		error(0, errno, "ERROR: failed to get stat of file '%s'", arg->fname);
+		error(0, errno, "ERROR: failed to get stat of file '%s'", arg->args[0]);
 		return false;
 	}
 	arg->size = min(arg->size, stat.st_size);
@@ -287,6 +293,33 @@ static bool do_flash(struct usb_device *dev, struct spi_flash *flash, struct arg
 		return false;
 	}
 	printf("Flash completed\n");
+
+	return true;
+}
+
+static bool do_custom(struct usb_device *dev, struct spi_flash *flash, struct arg *arg)
+{
+	uint8_t *rx_data = (uint8_t *)malloc(arg->data_rx_len);
+
+	if (!rx_data)
+		error(1, errno, "Can not allocate memory");
+
+	printf("Data to send:\n");
+	for (int i = 0; i < arg->data_len; i++)
+		printf("%02x ", arg->data[i]);
+
+	printf("\n");
+
+	if (!spi_nor_custom(dev, arg->data, arg->data_len, rx_data, arg->data_rx_len,
+			    arg->custom_duplex)) {
+		free(rx_data);
+		return false;
+	}
+	printf("Received data:\n");
+	for (int i = 0; i < arg->data_rx_len; i++)
+		printf("%02x ", rx_data[i]);
+
+	printf("\n");
 
 	return true;
 }
@@ -313,7 +346,75 @@ struct command_op command_ops[] = {
 		.func = do_erase,
 		.arguments_count = 1,
 	},
+	{
+		.command_name = "custom",
+		.command = COMMAND_CUSTOM,
+		.flags = 0,
+		.func = do_custom,
+		.arguments_count = 3,
+	},
 };
+
+/*
+ * s - pointer to string where numbers separated by space, tabulation or newline characters.
+ * value - pointer to save value.
+ * Update pointer s to next byte after parsed number. Return true if value was updated and
+ * false if end of string reached or no valid number found.
+ */
+static bool get_next_value_from_str(char **s, uint8_t *value)
+{
+	long val;
+	char *endptr;
+
+	while (**s == ' ' || **s == '\t' || **s == '\n')
+		(*s)++;
+
+	if (!**s)
+		return false;
+
+	val = strtol(*s, &endptr, 0);
+	if (endptr == *s || val < 0 || val > 0xff ||
+	    (*endptr != ' ' && *endptr != '\t' && *endptr != '\n' && *endptr != '\0'))
+		return false;
+
+	*value = val;
+	*s = endptr;
+
+	return true;
+}
+
+/* Fill arg->data with numbers from arg->args[idx] string.
+ * Expected that numbers separated by space, tabulation or newline characters.
+ */
+static bool parse_byte_array(struct arg *arg, int idx)
+{
+	char *ptr = arg->args[idx];
+	uint8_t value;
+	int pos = 0;
+	int size = 16;  // size of arg->data
+
+	arg->data = (uint8_t *)malloc(size);
+	if (!arg->data)
+		error(1, errno, "Can not allocate %d bytes of memory\n", size);
+
+	while (get_next_value_from_str(&ptr, &value)) {
+		if (pos >= size) {
+			size *= 2;
+			arg->data = (uint8_t *)realloc(arg->data, size);
+			if (!arg->data)
+				error(1, errno, "Can not allocate %d bytes of memory\n", size);
+		}
+		arg->data[pos++] = value;
+	}
+	arg->data_len = pos;
+	if (pos < size)
+		arg->data = (uint8_t *)realloc(arg->data, pos);
+
+	if (*ptr)
+		fprintf(stderr, "Can not parse byte array starting from '%s'\n", ptr);
+
+	return !(*ptr);
+}
 
 int parse_arg(int argc, char *argv[], struct arg *arg)
 {
@@ -322,6 +423,7 @@ int parse_arg(int argc, char *argv[], struct arg *arg)
 		{ "flash-eraseblock", required_argument, NULL, 0 },
 		{ "flash-page", required_argument, NULL, 0 },
 		{ "hide-progress", no_argument, NULL, 0 },
+		{ "custom-duplex", no_argument, NULL, 0 },
 		{ "help", no_argument, NULL, 'h' },
 		{ "offset", required_argument, NULL, 'o' },
 		{ "size", required_argument, NULL, 's' },
@@ -329,7 +431,8 @@ int parse_arg(int argc, char *argv[], struct arg *arg)
 	};
 	int32_t optidx = 0;
 	int c;
-	int pos = 0;
+	int args_idx = 0;
+	char *endptr;
 
 	memset(arg, 0, sizeof(*arg));
 	arg->size = 0xffffffff;
@@ -351,6 +454,9 @@ int parse_arg(int argc, char *argv[], struct arg *arg)
 				break;
 			case 3:
 				arg->hide_progress = true;
+				break;
+			case 4:
+				arg->custom_duplex = true;
 				break;
 			default:
 				break;
@@ -381,9 +487,8 @@ int parse_arg(int argc, char *argv[], struct arg *arg)
 		return -1;
 	}
 
-	arg->fname = NULL;
 	while (argc > optind) {
-		if (pos == 0) {
+		if (args_idx == 0) {
 			for (int i = 0; i < ARRAY_SIZE(command_ops); i++) {
 				if (!strcmp(argv[optind], command_ops[i].command_name)) {
 					arg->command_op = &command_ops[i];
@@ -399,12 +504,26 @@ int parse_arg(int argc, char *argv[], struct arg *arg)
 					argv[optind], arg->command_op->arguments_count - 1);
 				return -1;
 			}
-		} else if (pos == 1) {
-			arg->fname = strdup(argv[optind]);
+		} else if (args_idx <= ARRAY_SIZE(arg->args)) {
+			arg->args[args_idx - 1] = strdup(argv[optind]);
+			if (arg->command_op->command == COMMAND_CUSTOM) {
+				if (args_idx == 1) {
+					if (!parse_byte_array(arg, args_idx - 1))
+						return -1;
+				} else {
+					arg->data_rx_len = strtoll(arg->args[args_idx - 1],
+								   &endptr, 0);
+					if (*endptr) {
+						fprintf(stderr, "Can not parse data-rx-len '%s'\n",
+							arg->args[args_idx - 1]);
+						return -1;
+					}
+				}
+			}
 		}
 
 		optind++;
-		pos++;
+		args_idx++;
 	}
 
 	return 1;
@@ -491,8 +610,10 @@ int main(int argc, char *argv[])
 		arg.size = flash->size - arg.offset;
 	}
 
-	if (!arg.command_op->func(&dev, flash, &arg))
+	if (!arg.command_op->func(&dev, flash, &arg)) {
+		fprintf(stderr, "ERROR: failed to run %s command\n", arg.command_op->command_name);
 		retcode = 1;
+	}
 
 	usb_close(&dev);
 
