@@ -19,6 +19,7 @@
 #define FLAG_REQUIRE_SIZE        BIT(0)
 #define FLAG_REQUIRE_ERASE_BLOCK BIT(1)
 #define FLAG_REQUIRE_PAGE        BIT(2)
+#define FLAG_SKIP_FLASH_INIT     BIT(3)
 
 
 enum command {
@@ -337,7 +338,7 @@ struct command_op command_ops[] = {
 		.usage = "BYTES_TO_SEND RECEIVE_LENGTH [--custom-duplex]",
 		.example = "'0x3 0 0 0' 20",
 		.command = COMMAND_CUSTOM,
-		.flags = 0,
+		.flags = FLAG_SKIP_FLASH_INIT,
 		.func = do_custom,
 		.arguments_count = 3,
 	},
@@ -565,36 +566,40 @@ int main(int argc, char *argv[])
 	if (!spi_set_speed(&dev, false))
 		error(1, errno, "ERROR: failed set speed");
 
-	flash = spi_nor_init(&dev);
-	if (arg.flash_size)
-		flash->size = arg.flash_size;
+	if (!(arg.command_op->flags & FLAG_SKIP_FLASH_INIT)) {
+		flash = spi_nor_init(&dev);
+		if (arg.flash_size)
+			flash->size = arg.flash_size;
 
-	if (arg.flash_eraseblock)
-		flash->erase_block = arg.flash_eraseblock;
+		if (arg.flash_eraseblock)
+			flash->erase_block = arg.flash_eraseblock;
 
-	if (arg.flash_page)
-		flash->page = arg.flash_page;
+		if (arg.flash_page)
+			flash->page = arg.flash_page;
 
-	printf("Flash:      %s\n", flash->name);
-	printf("Size:       ");
-	print_size(flash->size, true);
-	printf("EraseBlock: ");
-	print_size(flash->erase_block, true);
-	printf("Page:       ");
-	print_size(flash->page, true);
-	printf("ID:        ");
-	for (int i = 0; i < flash->id_len; i++)
-		printf(" %02x", flash->ids[i]);
+		printf("Flash:      %s\n", flash->name);
+		printf("Size:       ");
+		print_size(flash->size, true);
+		printf("EraseBlock: ");
+		print_size(flash->erase_block, true);
+		printf("Page:       ");
+		print_size(flash->page, true);
+		printf("ID:        ");
+		for (int i = 0; i < flash->id_len; i++)
+			printf(" %02x", flash->ids[i]);
 
-	printf("\n\n");
-	printf("arg.offset: ");
-	print_size(arg.offset, true);
-	printf("arg.size:   ");
-	if (arg.size == 0xffffffff)
-		printf("maximum");
-	else
-		print_size(arg.size, true);
-	printf("\n");
+		printf("\n\n");
+		printf("arg.offset: ");
+		print_size(arg.offset, true);
+		printf("arg.size:   ");
+		if (arg.size == 0xffffffff)
+			printf("maximum");
+		else
+			print_size(arg.size, true);
+		printf("\n");
+	} else {
+		flash = spi_nor_get_empty_flash();
+	}
 
 	if ((arg.command_op->flags & FLAG_REQUIRE_SIZE) && !flash->size) {
 		fprintf(stderr, "ERROR: Unknown flash size\n");
@@ -611,7 +616,7 @@ int main(int argc, char *argv[])
 		usb_close(&dev);
 		return 1;
 	}
-	if (arg.offset + arg.size > flash->size) {
+	if ((arg.command_op->flags & FLAG_REQUIRE_SIZE) && (arg.offset + arg.size > flash->size)) {
 		// For COMMAND_FLASH size will be ajusted in do_flash().
 		// Now arg.size is maximal and this is normal.
 		if (arg.command_op->command != COMMAND_FLASH)

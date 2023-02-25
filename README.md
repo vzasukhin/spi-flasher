@@ -2,9 +2,11 @@
 
 **[English]** [Русский](README-ru.md)
 
-Command line tool to program/erase/read SPI NOR memories.
+Command line tool for Linux to program/erase/read SPI NOR memories.
 Suported CH341A USB->SPI converter. CH341A protocol used
 from https://github.com/setarcos/ch341prog
+
+Libusb package is required.
 
 Supported chips:
 
@@ -120,6 +122,9 @@ spi-flasher [options] custom <bytes_to_send> <response_length>
 ```
 
 Send custom data to device and receive `<response_length>` bytes of response.
+For `custom` command utility doesn't transfer any additianal data via SPI (for other commands
+utility requests ID registers from SPI Flash) and this command can be used for any devices
+with SPI interface (not only for flashes).
 Without `--custom-duplex` will receive data after send:
 
 ```

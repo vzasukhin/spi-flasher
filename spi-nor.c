@@ -206,6 +206,17 @@ struct spi_flash spi_flashes[] = {
 static struct spi_flash flash_id;
 
 
+struct spi_flash *spi_nor_get_empty_flash(void)
+{
+	// free memory that was allocated by strdup() in previous call of spi_nor_init()
+	if (flash_id.name)
+		free(flash_id.name);
+
+	flash_id.name = "Unknown";
+
+	return &flash_id;
+}
+
 struct spi_flash *spi_nor_init(struct usb_device *device)
 {
 	uint8_t buf_out[sizeof(spi_flashes[0].ids) + 1];

@@ -13,6 +13,7 @@ struct spi_flash {
 	uint8_t ids[16];
 };
 
+struct spi_flash *spi_nor_get_empty_flash(void);
 struct spi_flash *spi_nor_init(struct usb_device *device);
 bool spi_nor_read(struct usb_device *device, struct spi_flash *flash,
 		  uint32_t offset, uint32_t len, uint8_t *buf, int fd, cb_progress progress);
