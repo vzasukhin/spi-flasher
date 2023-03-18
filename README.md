@@ -15,6 +15,9 @@ Supported chips:
 - W25Q32BV, W25Q64FV, W25Q128JV-IN/IQ/JQ/JM/FW
 - MT25Qxxx
 
+Another chips can be used if they parameters will be specified (see `--flash-size`,
+`--flash-eraseblock`, `--flash-page`).
+
 Usage:
 
 ```
@@ -69,6 +72,9 @@ spi-flasher --flash-size 2M -s 1MB read file.dat
 
 # flash file to SPI Flash (erase is not required)
 spi-flasher flash file.dat
+
+# flash data via pipe (write to stdin)
+echo "Some data from command line" | spi-flasher flash -
 ```
 
 ## read command
@@ -85,6 +91,9 @@ SPI Flash end.
 For read command SPI Flash size must be known. If SPI Flash autodetect failed
 then `--flash-size` should be specified.
 
+If instead of file name specified "-" then data will be output to stdout and it can be used
+in pipe. Example: `spi-flasher read - -s 100 > myfile.dat`.
+
 ## flash command
 
 Usage:
@@ -99,6 +108,10 @@ Programm will erase requered memory region before write.
 
 For flash command SPI Flash size, erase block and page block must be known. If SPI Flash autodetect
 failed then `--flash-size`, `--flash-eraseblock` and `--flash-page` should be specified.
+
+If instead of file name specified "-" then data will be input from stdin.
+Example: `cat myfile.dat | spi-flasher flash -`. In this case erasing will do before writing
+in each block.
 
 ## erase command
 

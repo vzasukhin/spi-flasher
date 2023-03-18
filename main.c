@@ -138,7 +138,7 @@ void progress_close(void)
 	progress_last_points = (uint32_t)-1;
 }
 
-void print_size(uint32_t value, bool eol)
+void print_size(FILE *f, uint32_t value, bool eol)
 {
 	static const char *suffixes[] = {"", "KiB", "MiB", "GiB"};
 	int idx = 0;
@@ -152,7 +152,7 @@ void print_size(uint32_t value, bool eol)
 				break;
 		}
 	}
-	printf("%u%s%s", value, suffixes[idx], eol ? "\n" : "");
+	fprintf(f, "%u%s%s", value, suffixes[idx], eol ? "\n" : "");
 }
 
 bool parse_size(char *s, uint32_t *value)
@@ -197,41 +197,52 @@ bool parse_size(char *s, uint32_t *value)
 
 static bool do_read(struct usb_device *dev, struct spi_flash *flash, struct arg *arg)
 {
-	int fd = open(arg->args[0], O_CREAT | O_WRONLY | O_TRUNC,
-		      S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
+	int fd;
 	bool res;
+
+	if (!strcmp(arg->args[0], "-"))
+		fd = STDOUT_FILENO;
+	else
+		fd = open(arg->args[0], O_CREAT | O_WRONLY | O_TRUNC,
+			  S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
 
 	if (fd == -1) {
 		error(0, errno, "ERROR: failed to open file '%s'", arg->args[0]);
 		return false;
 	}
-	printf("Reading %u bytes from offset %u...\n", arg->size, arg->offset);
+	if (fd != STDOUT_FILENO)
+		printf("Reading %u bytes from offset %u...\n", arg->size, arg->offset);
 	res = spi_nor_read(dev, flash, arg->offset, arg->size, NULL, fd, progress);
-	progress_close();
-	if (close(fd) || !res) {
+	if (progress)
+		progress_close();
+
+	if ((fd != STDOUT_FILENO && close(fd)) || !res) {
 		error(0, errno, "ERROR: failed read or save data");
 		return false;
 	}
-	printf("Read completed\n");
+	if (fd != STDOUT_FILENO)
+		printf("Read completed\n");
 
 	return true;
 }
 
-static bool do_erase(struct usb_device *dev, struct spi_flash *flash, struct arg *arg)
+static bool _erase(struct usb_device *dev, struct spi_flash *flash, uint32_t offset, uint32_t size)
 {
 	uint32_t erase_size;
 	bool res;
 
-	printf("Erasing %u bytes", arg->size);
-	erase_size = spi_nor_calc_erase_size(flash, arg->offset, arg->size);
-	if (erase_size != arg->size)
+	printf("Erasing %u bytes", size);
+	erase_size = spi_nor_calc_erase_size(flash, offset, size);
+	if (erase_size != size)
 		printf(", rounded to %u bytes", erase_size);
 
 	printf(" (%u sectors, starting from %u)...\n",
-		erase_size / flash->erase_block, arg->offset & ~(flash->erase_block - 1));
+		erase_size / flash->erase_block, offset & ~(flash->erase_block - 1));
 
-	res = spi_nor_erase_smart(dev, flash, arg->offset, arg->size, progress);
-	progress_close();
+	res = spi_nor_erase_smart(dev, flash, offset, size, progress);
+	if (progress)
+		progress_close();
+
 	if (!res) {
 		error(0, errno, "ERROR: failed to erase");
 		return false;
@@ -242,34 +253,59 @@ static bool do_erase(struct usb_device *dev, struct spi_flash *flash, struct arg
 	return true;
 }
 
+static bool do_erase(struct usb_device *dev, struct spi_flash *flash, struct arg *arg)
+{
+	return _erase(dev, flash, arg->offset, arg->size);
+}
+
 static bool do_flash(struct usb_device *dev, struct spi_flash *flash, struct arg *arg)
 {
 	struct stat stat;
-	int fd = open(arg->args[0], O_RDONLY);
+	uint32_t size;
+	uint32_t flashed_size;
+	int fd;
 	bool res;
+	bool need_erase;
+
+	if (!strcmp(arg->args[0], "-"))
+		fd = STDIN_FILENO;
+	else
+		fd = open(arg->args[0], O_RDONLY);
 
 	if (fd == -1) {
 		error(0, errno, "ERROR: failed to open file '%s'", arg->args[0]);
 		return false;
 	}
-	if (fstat(fd, &stat)) {
-		error(0, errno, "ERROR: failed to get stat of file '%s'", arg->args[0]);
-		return false;
+
+	if (fd != STDIN_FILENO) {
+		if (fstat(fd, &stat)) {
+			error(0, errno, "ERROR: failed to get stat of file");
+			return false;
+		}
+		size = stat.st_size;
+		need_erase = false;
+		if (!_erase(dev, flash, arg->offset, size))
+			return false;
+		printf("Flashing %u bytes from offset %u...\n", size, arg->offset);
+	} else {
+		size = arg->size;
+		need_erase = true;
+		printf("Flashing from offset %u...\n", arg->offset);
 	}
-	arg->size = min(arg->size, stat.st_size);
 
-	if (!do_erase(dev, flash, arg))
-		return false;
+	res = spi_nor_program_smart(dev, flash, arg->offset, size, &flashed_size, NULL, fd,
+				    need_erase, progress, NULL, NULL);
+	if (progress)
+		progress_close();
 
-	printf("Flashing %u bytes from offset %u...\n", arg->size, arg->offset);
-	res = spi_nor_program_smart(dev, flash, arg->offset, arg->size, NULL, fd, progress);
-	progress_close();
-	close(fd);
+	if (fd != STDIN_FILENO)
+		close(fd);
+
 	if (!res) {
 		error(0, errno, "ERROR: failed flash or read data from file");
 		return false;
 	}
-	printf("Flash completed\n");
+	printf("Flash completed (%u bytes)\n", flashed_size);
 
 	return true;
 }
@@ -537,6 +573,10 @@ int parse_arg(int argc, char *argv[], struct arg *arg)
 		args_idx++;
 	}
 
+	// Disable progress bar if data output to stdout
+	if (arg->command_op->command == COMMAND_READ && !strcmp(arg->args[0], "-"))
+		arg->hide_progress = true;
+
 	return 1;
 }
 
@@ -577,26 +617,26 @@ int main(int argc, char *argv[])
 		if (arg.flash_page)
 			flash->page = arg.flash_page;
 
-		printf("Flash:      %s\n", flash->name);
-		printf("Size:       ");
-		print_size(flash->size, true);
-		printf("EraseBlock: ");
-		print_size(flash->erase_block, true);
-		printf("Page:       ");
-		print_size(flash->page, true);
-		printf("ID:        ");
+		fprintf(stderr, "Flash:      %s\n", flash->name);
+		fprintf(stderr, "Size:       ");
+		print_size(stderr, flash->size, true);
+		fprintf(stderr, "EraseBlock: ");
+		print_size(stderr, flash->erase_block, true);
+		fprintf(stderr, "Page:       ");
+		print_size(stderr, flash->page, true);
+		fprintf(stderr, "ID:        ");
 		for (int i = 0; i < flash->id_len; i++)
-			printf(" %02x", flash->ids[i]);
+			fprintf(stderr, " %02x", flash->ids[i]);
 
-		printf("\n\n");
-		printf("arg.offset: ");
-		print_size(arg.offset, true);
-		printf("arg.size:   ");
+		fprintf(stderr, "\n\n");
+		fprintf(stderr, "arg.offset: ");
+		print_size(stderr, arg.offset, true);
+		fprintf(stderr, "arg.size:   ");
 		if (arg.size == 0xffffffff)
-			printf("maximum");
+			fprintf(stderr, "maximum");
 		else
-			print_size(arg.size, true);
-		printf("\n");
+			print_size(stderr, arg.size, true);
+		fprintf(stderr, "\n");
 	} else {
 		flash = spi_nor_get_empty_flash();
 	}
@@ -620,7 +660,7 @@ int main(int argc, char *argv[])
 		// For COMMAND_FLASH size will be ajusted in do_flash().
 		// Now arg.size is maximal and this is normal.
 		if (arg.command_op->command != COMMAND_FLASH)
-			printf("WARNING: size is truncated to SPI memory size\n");
+			fprintf(stderr, "WARNING: size is truncated to SPI memory size\n");
 
 		arg.size = flash->size - arg.offset;
 	}

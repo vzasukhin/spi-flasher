@@ -448,7 +448,8 @@ bool spi_nor_erase_smart(struct usb_device *device, struct spi_flash *flash, uin
 			return false;
 		}
 	}
-	if (!spi_nor_erase(device, flash, offset - size_pre, len + size_pre + size_post, progress)) {
+	if (!spi_nor_erase(device, flash, offset - size_pre, len + size_pre + size_post,
+			   progress)) {
 		if (size_pre)
 			free(buf_pre);
 		if (size_post)
@@ -458,14 +459,16 @@ bool spi_nor_erase_smart(struct usb_device *device, struct spi_flash *flash, uin
 	}
 
 	if (size_pre) {
-		res = spi_nor_program(device, flash, offset - size_pre, size_pre, buf_pre, 0, NULL);
+		res = spi_nor_program(device, flash, offset - size_pre, size_pre, NULL,
+				      buf_pre, 0, false, NULL, NULL, NULL, 0);
 		free(buf_pre);
 		if (!res)
 			return false;
 	}
 
 	if (size_post) {
-		res = spi_nor_program_smart(device, flash, offset + len, size_post, buf_post, 0, NULL);
+		res = spi_nor_program_smart(device, flash, offset + len, size_post, NULL, buf_post,
+					    0, false, NULL, NULL, NULL);
 		free(buf_post);
 		return res;
 	}
@@ -503,8 +506,24 @@ bool spi_nor_program_page_single(struct usb_device *device, struct spi_flash *fl
 	return spi_nor_cmd_send(device, CMD_WRITE_DISABLE, NULL, 0);
 }
 
+/* Flash data. Offset must be aligned to page size.
+ * offset - start address in memory.
+ * len - bytes count to flash.
+ * flashed_size - will write to this variable count of flashed bytes.
+ * buf - if not NULL then use data to flash from this buffer.
+ * fd - if `buf` is NULL then read data from this file descriptor.
+ * need_erase - if true then erase block before start write to it.
+ * progress - callback to show progress bar.
+ * read_data - if not NULL then allocate memory and store data that readed from fd.
+ *             Can be used for data verification.
+ * read_len - will write count of data that read to `read_data`.
+ * read_data_buf_size - current allocated size of `read_data`.
+ * Return true if success or false if failed.
+ */
 bool spi_nor_program(struct usb_device *device, struct spi_flash *flash, uint32_t offset,
-		     uint32_t len, uint8_t *buf, int fd, cb_progress progress)
+		     uint32_t len, uint32_t *flashed_size, uint8_t *buf, int fd, bool need_erase,
+		     cb_progress progress, uint8_t **read_data, uint32_t *read_len,
+		     uint32_t read_data_buf_size)
 {
 	uint32_t block_len;
 	uint32_t pos = 0;
@@ -514,6 +533,11 @@ bool spi_nor_program(struct usb_device *device, struct spi_flash *flash, uint32_
 			progress(pos, len);
 		}
 
+		if (need_erase && ((offset + pos) & (flash->erase_block - 1)) == 0) {
+			if (!spi_nor_erase_block(device, flash, offset + pos))
+				return false;
+		}
+
 		block_len = min(len - pos, flash->page);
 		if (buf) {
 			if (!spi_nor_program_page_single(device, flash, offset + pos, buf + pos,
@@ -521,13 +545,31 @@ bool spi_nor_program(struct usb_device *device, struct spi_flash *flash, uint32_
 				return false;
 		} else {
 			uint8_t local_buf[block_len];
+			int ret = read(fd, local_buf, block_len);
 
-			if (read(fd, local_buf, block_len) == -1)
+			if (ret == -1)
 				return false;
 
-			if (!spi_nor_program_page_single(device, flash, offset + pos, local_buf,
-							 block_len))
+			if (read_data) {
+				if (read_data_buf_size < *read_len + ret) {
+					read_data_buf_size += 65536;
+					*read_data = (uint8_t *)realloc(*read_data,
+									read_data_buf_size);
+					if (!*read_data)
+						return false;
+				}
+				memcpy(*read_data + *read_len, local_buf, ret);
+				*read_len += ret;
+			}
+			if (ret && !spi_nor_program_page_single(device, flash, offset + pos,
+								local_buf, ret))
 				return false;
+
+			if (flashed_size)
+				*flashed_size += ret;
+
+			if (ret != block_len)
+				break;
 		}
 		pos += block_len;
 	}
@@ -535,10 +577,41 @@ bool spi_nor_program(struct usb_device *device, struct spi_flash *flash, uint32_
 	return true;
 }
 
+/* Flash data. If offset is not aligned to page size then restore data in page before offset.
+ * offset - start address in memory.
+ * len - bytes count to flash.
+ * flashed_size - will write to this variable count of flashed bytes.
+ * buf - if not NULL then use data to flash from this buffer.
+ * fd - if `buf` is NULL then read data from this file descriptor.
+ * need_erase - if true then erase block before start write to it.
+ * progress - callback to show progress bar.
+ * read_data - if not NULL then allocate memory and store data that readed from fd.
+ *             Can be used for data verification.
+ * read_len - will write count of data that read to `read_data`.
+ * Return true if success or false if failed.
+ */
 bool spi_nor_program_smart(struct usb_device *device, struct spi_flash *flash, uint32_t offset,
-			   uint32_t len, uint8_t *buf, int fd, cb_progress progress)
+			   uint32_t len, uint32_t *flashed_size, uint8_t *buf, int fd,
+			   bool need_erase, cb_progress progress, uint8_t **read_data,
+			   uint32_t *read_len)
 {
 	uint32_t size_pre = offset % flash->page;
+	uint32_t read_data_buf_size = 65536;
+	int ret;
+
+	if (flashed_size)
+		*flashed_size = 0;
+
+	if (!read_len)
+		read_data = NULL;
+
+	if (read_data) {
+		*read_data = (uint8_t *)malloc(read_data_buf_size);
+		if (!*read_data)
+			return false;
+
+		*read_len = 0;
+	}
 
 	if (size_pre) {
 		uint8_t buf_pre[flash->page];
@@ -547,12 +620,28 @@ bool spi_nor_program_smart(struct usb_device *device, struct spi_flash *flash, u
 		if (!spi_nor_read(device, flash, offset - size_pre, flash->page, buf_pre, 0, NULL))
 			return false;
 
-		if (buf)
-			memcpy(buf_pre + size_pre, buf, len_in_first_page);
-		else if (read(fd, buf_pre + size_pre, len_in_first_page) != len_in_first_page)
+		if (need_erase &&
+		    !spi_nor_erase_block(device, flash, offset & ~(flash->erase_block - 1)))
 			return false;
 
-		if (!spi_nor_program_page_single(device, flash, offset - size_pre, buf_pre, flash->page))
+		if (!buf) {
+			ret = read(fd, buf_pre + size_pre, len_in_first_page);
+			if (ret == -1)
+				return false;
+			else if (ret == 0)
+				return true;  // file is empty
+
+			if (read_data) {
+				memcpy(*read_data, buf_pre + size_pre, ret);
+				*read_len = (uint32_t)ret;
+			}
+			if (flashed_size)
+				*flashed_size = ret;
+		} else
+			memcpy(buf_pre + size_pre, buf, len_in_first_page);
+
+		if (!spi_nor_program_page_single(device, flash, offset - size_pre, buf_pre,
+						 flash->page))
 			return false;
 
 		len -= len_in_first_page;
@@ -561,7 +650,8 @@ bool spi_nor_program_smart(struct usb_device *device, struct spi_flash *flash, u
 			buf += len_in_first_page;
 	}
 
-	return spi_nor_program(device, flash, offset, len, buf, fd, progress);
+	return spi_nor_program(device, flash, offset, len, flashed_size, buf, fd, need_erase,
+			       progress, read_data, read_len, read_data_buf_size);
 }
 
 uint32_t spi_nor_calc_erase_size(struct spi_flash *flash, uint32_t offset, uint32_t len)
