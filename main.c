@@ -55,6 +55,7 @@ struct arg {
 	struct command_op *command_op;
 	bool custom_duplex;
 	bool hide_progress;
+	bool verify;
 };
 
 struct multiplier {
@@ -258,9 +259,66 @@ static bool do_erase(struct usb_device *dev, struct spi_flash *flash, struct arg
 	return _erase(dev, flash, arg->offset, arg->size);
 }
 
+/* Compare two files and return count of differences.
+ */
+static uint32_t compare_buffers(uint8_t *buf1, uint8_t *buf2, uint32_t len)
+{
+	uint32_t errors = 0;
+
+	for (uint32_t i = 0; i < len; i++) {
+		if (buf1[i] != buf2[i])
+			errors++;
+	}
+
+	return errors;
+}
+
+/* Compare two files and return count of differences or 0xffffffff in length of file is not equal.
+ */
+static uint32_t compare_files(int fd, int fd_verify)
+{
+	uint8_t buf1[4096];
+	uint8_t buf2[4096];
+	int res1;
+	int res2;
+	uint32_t errors = 0;
+
+	while (1) {
+		res1 = read(fd, buf1, sizeof(buf1));
+		res2 = read(fd_verify, buf2, sizeof(buf2));
+		if (res1 < 0 || res2 < 0 || res1 != res2)
+			return (uint32_t)-1;
+
+		if (!res1)
+			break;
+
+		errors += compare_buffers(buf1, buf2, res1);
+	}
+
+	return errors;
+}
+
+/* Return pointer to static variable with unique file name in /tmp directory
+ */
+static char *get_tmp_fname(void)
+{
+	static char fname[32];
+	int i = 0;
+
+	do {
+		snprintf(fname, sizeof(fname), "/tmp/spi-flasher%d.tmp", i);
+		i++;
+	} while (!access(fname, F_OK));
+
+	return fname;
+}
+
 static bool do_flash(struct usb_device *dev, struct spi_flash *flash, struct arg *arg)
 {
 	struct stat stat;
+	uint8_t *verify_buf;
+	uint8_t **ptr_verify_buf = NULL;
+	uint32_t verify_buf_len;
 	uint32_t size;
 	uint32_t flashed_size;
 	int fd;
@@ -291,21 +349,83 @@ static bool do_flash(struct usb_device *dev, struct spi_flash *flash, struct arg
 		size = arg->size;
 		need_erase = true;
 		printf("Flashing from offset %u...\n", arg->offset);
+		if (arg->verify)
+			ptr_verify_buf = &verify_buf;
 	}
 
 	res = spi_nor_program_smart(dev, flash, arg->offset, size, &flashed_size, NULL, fd,
-				    need_erase, progress, NULL, NULL);
+				    need_erase, progress, ptr_verify_buf, &verify_buf_len);
 	if (progress)
 		progress_close();
-
-	if (fd != STDIN_FILENO)
-		close(fd);
 
 	if (!res) {
 		error(0, errno, "ERROR: failed flash or read data from file");
 		return false;
 	}
 	printf("Flash completed (%u bytes)\n", flashed_size);
+
+	if (arg->verify) {
+		char *fname_tmp = get_tmp_fname();
+		uint8_t *buf = NULL;
+		uint32_t errors;
+		int fd_verify = 0;
+
+		printf("Verification...\n");
+		if (fd != STDIN_FILENO) {
+			if (lseek(fd, 0, SEEK_SET) == (off_t)-1) {
+				error(0, errno, "ERROR: failed to lseek file for verify");
+				return false;
+			}
+			fd_verify = open(fname_tmp, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
+			if (fd_verify == -1) {
+				error(0, errno, "ERROR: failed to create temporary file %s",
+				      fname_tmp);
+				return false;
+			}
+			verify_buf_len = size;
+		} else {
+			if (verify_buf_len != flashed_size) {
+				error(0, 0, "ERROR: flashed %u bytes, but expected %u",
+				      flashed_size, verify_buf_len);
+				unlink(fname_tmp);
+				return false;
+			}
+			buf = (uint8_t *)malloc(verify_buf_len);
+			if (!buf) {
+				error(0, errno, "ERROR: can not allocate memory");
+				return false;
+			}
+		}
+
+		res = spi_nor_read(dev, flash, arg->offset, verify_buf_len, buf, fd_verify, progress);
+		if (progress)
+			progress_close();
+		if (!res) {
+			unlink(fname_tmp);
+			return false;
+		}
+
+		if (fd != STDIN_FILENO) {
+			if (lseek(fd_verify, 0, SEEK_SET) == (off_t)-1) {
+				error(0, errno, "ERROR: failed to lseek temporary file for verify");
+				unlink(fname_tmp);
+				return false;
+			}
+			errors = compare_files(fd, fd_verify);
+			close(fd_verify);
+			unlink(fname_tmp);
+		} else {
+			errors = compare_buffers(buf, verify_buf, verify_buf_len);
+		}
+		if (errors) {
+			error(0, 0, "ERROR: found %u differences", errors);
+			return false;
+		} else
+			printf("Verification completed\n");
+	}
+
+	if (fd != STDIN_FILENO)
+		close(fd);
 
 	return true;
 }
@@ -471,6 +591,7 @@ int parse_arg(int argc, char *argv[], struct arg *arg)
 		{ "flash-page", required_argument, NULL, 0 },
 		{ "hide-progress", no_argument, NULL, 0 },
 		{ "custom-duplex", no_argument, NULL, 0 },
+		{ "verify", no_argument, NULL, 0 },
 		{ "help", no_argument, NULL, 'h' },
 		{ "offset", required_argument, NULL, 'o' },
 		{ "size", required_argument, NULL, 's' },
@@ -504,6 +625,9 @@ int parse_arg(int argc, char *argv[], struct arg *arg)
 				break;
 			case 4:
 				arg->custom_duplex = true;
+				break;
+			case 5:
+				arg->verify = true;
 				break;
 			default:
 				break;

@@ -35,6 +35,7 @@ Arguments list:
 
 - `-o`, `--offset` - specify offset (address) for read/flash/erase;
 - `-s`, `--size` - specify data size for read/flash/erase;
+- `--verify` - check flashed data;
 - `--hide-progress` - don't show progress bar (can be helpfull for automatic run to reduce
   logs size);
 - `--custom-duplex` - for `custom` command will output response starting from first byte.
@@ -71,7 +72,7 @@ spi-flasher -o 3MiB -s 1MiB read file.dat
 spi-flasher --flash-size 2M -s 1MB read file.dat
 
 # flash file to SPI Flash (erase is not required)
-spi-flasher flash file.dat
+spi-flasher flash file.dat --verify
 
 # flash data via pipe (write to stdin)
 echo "Some data from command line" | spi-flasher flash -
@@ -108,6 +109,8 @@ Programm will erase requered memory region before write.
 
 For flash command SPI Flash size, erase block and page block must be known. If SPI Flash autodetect
 failed then `--flash-size`, `--flash-eraseblock` and `--flash-page` should be specified.
+
+If `--verify` argument is specified then flashed data will be read out and checked.
 
 If instead of file name specified "-" then data will be input from stdin.
 Example: `cat myfile.dat | spi-flasher flash -`. In this case erasing will do before writing

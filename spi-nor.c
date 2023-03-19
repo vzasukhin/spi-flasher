@@ -351,8 +351,19 @@ bool spi_nor_read(struct usb_device *device, struct spi_flash *flash,
 		return false;
 
 	if (buf) {
-		if (!spi_transfer_nocs(device, NULL, buf, len))
-			return false;
+		while (remain) {
+			uint32_t block_len = min(remain, 16 * KiB);
+
+			if (progress) {
+				progress(pos, len);
+				pos += block_len;
+			}
+			remain -= block_len;
+			if (!spi_transfer_nocs(device, NULL, buf, block_len))
+				return false;
+
+			buf += block_len;
+		}
 	} else {
 		uint8_t local_buf[16 * KiB];
 
