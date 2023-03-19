@@ -471,8 +471,8 @@ struct command_op command_ops[] = {
 	{
 		.command_name = "flash",
 		.help = "write data to SPI memory. Must be specified file to get data",
-		.usage = "FILE [-s] [-o] [--flash-size] [--flash-eraseblock] [--flash-page]",
-		.example = "a.dat",
+		.usage = "FILE [-s] [-o] [--verify] [--flash-size] [--flash-eraseblock] [--flash-page]",
+		.example = "a.dat --verify",
 		.command = COMMAND_FLASH,
 		.flags = FLAG_REQUIRE_SIZE | FLAG_REQUIRE_ERASE_BLOCK | FLAG_REQUIRE_PAGE,
 		.func = do_flash,
@@ -515,6 +515,7 @@ void show_help(void)
 	       " -s, --size SIZE      - maximum size of data to read, flash or erase. If not specified,\n" \
 	       "                        then will try to read/erase all contains of memory.\n" \
 	       "                        For flash command will write not more than source file size\n" \
+	       " --verify             - verify data after flashing\n" \
 	       " --hide-progress      - do not show progress bar\n" \
 	       " --custom-duplex      - start receive data from first sended byte (only for custom command)\n" \
 	       " --flash-size SIZE    - override size of memory\n" \
